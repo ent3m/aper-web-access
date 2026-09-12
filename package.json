@@ -1,0 +1,35 @@
+{
+  "name": "aper-web-access",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "check": "vp check",
+    "test": "vp test",
+    "build": "vp build"
+  },
+  "devDependencies": {
+    "vite": "npm:@voidzero-dev/vite-plus-core@0.3.1",
+    "vite-plus": "0.3.1",
+    "wrangler": "4.131.1"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "11.24.0",
+      "onFail": "download"
+    }
+  },
+  "cloudflare": {
+    "bindings": {
+      "APER_ALLOWED_ORIGIN": {
+        "description": "Exact Aper browser origin, including scheme and development port. Copy from Aper setup; no trailing slash."
+      },
+      "APER_RUNTIME_SECRET": {
+        "description": "Paste the fresh 64-character runtime secret explicitly copied from Aper setup. Never use a Cloudflare API token or an MCP credential."
+      }
+    }
+  }
+}

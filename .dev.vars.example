@@ -1,0 +1,2 @@
+# Replace in Cloudflare with the 64-character runtime secret copied explicitly from Aper.
+APER_RUNTIME_SECRET=

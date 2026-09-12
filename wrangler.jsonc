@@ -1,0 +1,12 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "aper-web-access",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["global_fetch_strictly_public"],
+  "workers_dev": true,
+  "send_metrics": false,
+  "keep_vars": true,
+  "vars": { "APER_ALLOWED_ORIGIN": "https://aper.run" },
+  "observability": { "enabled": false },
+}
