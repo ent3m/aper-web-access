@@ -7,6 +7,7 @@
   "workers_dev": true,
   "send_metrics": false,
   "keep_vars": true,
+  "browser": { "binding": "BROWSER" },
   "vars": { "APER_ALLOWED_ORIGIN": "https://aper.run" },
   "observability": { "enabled": false },
 }

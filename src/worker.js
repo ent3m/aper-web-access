@@ -1,75 +1,13 @@
 import { relayRequest, searchServices } from "./search-relay.js";
+import { AcquisitionError, publicTarget, readBounded } from "./public-network.js";
+import { renderPublicDocument } from "./browser-rendering.js";
+export { publicTarget } from "./public-network.js";
 export const INFO = Object.freeze({
   kind: "aper-web-access",
-  protocolVersion: "1.1",
-  buildId: "1.1.0",
+  protocolVersion: "1.2",
+  buildId: "1.2.0",
   capabilities: { staticFetch: true, browserRun: false, searchRelay: searchServices },
 });
-
-class AcquisitionError extends Error {
-  constructor(code, status = 400) {
-    super(code);
-    this.status = status;
-  }
-}
-
-export function publicTarget(input) {
-  if (typeof input !== "string" || input.length > 8192)
-    throw new AcquisitionError("invalid_target");
-  let url;
-  try {
-    url = new URL(input);
-  } catch {
-    throw new AcquisitionError("invalid_target");
-  }
-  const host = url.hostname.toLowerCase().replace(/\.$/, "");
-  if (
-    !["http:", "https:"].includes(url.protocol) ||
-    url.username ||
-    url.password ||
-    url.port ||
-    !host.includes(".") ||
-    host.includes(":") ||
-    /(?:^|\.)(?:localhost|local|internal|lan|home|test|invalid|example|onion)$/.test(host)
-  )
-    throw new AcquisitionError("forbidden_target", 403);
-  // DNS names use the platform's strictly public egress; IP literals are deliberately unsupported.
-  if (/^[\d.]+$/.test(host)) throw new AcquisitionError("forbidden_target", 403);
-  url.hash = "";
-  return url;
-}
-
-async function readBounded(body, limit, signal) {
-  if (!body) return new Uint8Array();
-  const reader = body.getReader();
-  const chunks = [];
-  let size = 0;
-  const abort = () => {
-    void reader.cancel().catch(() => {});
-  };
-  signal.addEventListener("abort", abort, { once: true });
-  try {
-    while (true) {
-      signal.throwIfAborted();
-      const { done, value } = await reader.read();
-      signal.throwIfAborted();
-      if (done) break;
-      size += value.byteLength;
-      if (size > limit) throw new AcquisitionError("response_too_large", 413);
-      chunks.push(value);
-    }
-    const bytes = new Uint8Array(size);
-    let offset = 0;
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    return bytes;
-  } finally {
-    signal.removeEventListener("abort", abort);
-    await reader.cancel().catch(() => {});
-  }
-}
 
 async function acquire(input, outbound, signal, evidence) {
   let url = publicTarget(input);
@@ -77,7 +15,9 @@ async function acquire(input, outbound, signal, evidence) {
   const redirects = evidence.redirects;
   for (;;) {
     evidence.contacts.push(url.href);
-    const response = await outbound(url.href, {
+    const target = new URL(url);
+    target.hash = "";
+    const response = await outbound(target.href, {
       method: "GET",
       redirect: "manual",
       credentials: "omit",
@@ -107,10 +47,16 @@ async function acquire(input, outbound, signal, evidence) {
     const contentType = response.headers.get("content-type") ?? "";
     if (
       response.status !== 200 ||
+      response.headers.has("content-range") ||
       !/^(text\/(html|plain)|application\/xhtml\+xml)(;|$)/i.test(contentType)
     ) {
       await response.body?.cancel();
-      throw new AcquisitionError("unsupported_document", 422);
+      throw new AcquisitionError(
+        response.status === 200 || response.status === 206
+          ? "unsupported_document"
+          : "target_http_error",
+        422,
+      );
     }
     if (Number(response.headers.get("content-length")) > 2_000_000) {
       await response.body?.cancel();
@@ -148,7 +94,13 @@ async function authenticated(header, secret) {
   return difference === 0;
 }
 
-export async function handleRequest(request, env, outbound = fetch) {
+export async function handleRequest(
+  request,
+  env,
+  outbound = fetch,
+  waitUntil = () => {},
+  render = renderPublicDocument,
+) {
   const headers = {
     "Cache-Control": "no-store",
     Vary: "Origin",
@@ -169,7 +121,11 @@ export async function handleRequest(request, env, outbound = fetch) {
   const url = new URL(request.url);
   const service = /^\/v1\/search\/(brave|exa|firecrawl|you)$/.exec(url.pathname)?.[1];
   const method =
-    url.pathname === "/v1/info" ? "GET" : url.pathname === "/v1/fetch" || service ? "POST" : null;
+    url.pathname === "/v1/info"
+      ? "GET"
+      : ["/v1/fetch", "/v1/render"].includes(url.pathname) || service
+        ? "POST"
+        : null;
   if (!method || url.search) return json({ error: "route_not_found" }, 404);
   if (request.method === "OPTIONS") {
     const requestedHeaders = (request.headers.get("access-control-request-headers") ?? "")
@@ -196,7 +152,8 @@ export async function handleRequest(request, env, outbound = fetch) {
     return json({ error: "configuration_invalid" }, 503);
   if (!(await authenticated(request.headers.get("authorization"), env.APER_RUNTIME_SECRET)))
     return json({ error: "unauthorized" }, 401);
-  if (method === "GET") return json(INFO);
+  if (method === "GET")
+    return json({ ...INFO, capabilities: { ...INFO.capabilities, browserRun: !!env.BROWSER } });
   const controller = new AbortController();
   const abort = () => controller.abort();
   request.signal.addEventListener("abort", abort, { once: true });
@@ -276,6 +233,10 @@ export async function handleRequest(request, env, outbound = fetch) {
     }
     if (!input || typeof input !== "object" || Object.keys(input).length !== 1 || !("url" in input))
       throw new AcquisitionError("invalid_request");
+    if (url.pathname === "/v1/render")
+      return json(
+        await render(input.url, env.BROWSER, outbound, controller.signal, evidence, waitUntil),
+      );
     return json(await acquire(input.url, outbound, controller.signal, evidence));
   } catch (error) {
     if (controller.signal.aborted)
@@ -289,4 +250,7 @@ export async function handleRequest(request, env, outbound = fetch) {
   }
 }
 
-export default { fetch: (request, env) => handleRequest(request, env) };
+export default {
+  fetch: (request, env, context) =>
+    handleRequest(request, env, fetch, (task) => context.waitUntil(task)),
+};
