@@ -132,7 +132,11 @@ describe("Web Access production template", () => {
     const failure = await handleRequest(fetchRequest("https://example.com"), env, () => {
       throw new Error(env.APER_RUNTIME_SECRET);
     });
-    expect(await failure.text()).toBe('{"error":"acquisition_failed"}');
+    expect(await failure.json()).toEqual({
+      error: "acquisition_failed",
+      contacts: ["https://example.com/"],
+      redirects: [],
+    });
   });
   it("caps redirects and rejects partial responses, invalid encoding and large headers", async () => {
     const loop = vi.fn(() =>

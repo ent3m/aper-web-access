@@ -1,8 +1,9 @@
+import { relayRequest, searchServices } from "./search-relay.js";
 export const INFO = Object.freeze({
   kind: "aper-web-access",
-  protocolVersion: "1.0",
-  buildId: "1.0.0",
-  capabilities: { staticFetch: true, browserRun: false, searchRelay: [] },
+  protocolVersion: "1.1",
+  buildId: "1.1.0",
+  capabilities: { staticFetch: true, browserRun: false, searchRelay: searchServices },
 });
 
 class AcquisitionError extends Error {
@@ -70,11 +71,12 @@ async function readBounded(body, limit, signal) {
   }
 }
 
-async function acquire(input, outbound, signal) {
+async function acquire(input, outbound, signal, evidence) {
   let url = publicTarget(input);
   const requestedUrl = url.href;
-  const redirects = [];
+  const redirects = evidence.redirects;
   for (;;) {
+    evidence.contacts.push(url.href);
     const response = await outbound(url.href, {
       method: "GET",
       redirect: "manual",
@@ -85,6 +87,7 @@ async function acquire(input, outbound, signal) {
         "User-Agent": "Aper-Web-Access/1.0",
       },
     });
+    evidence.upstreamStatus = response.status;
     let headerBytes = 0;
     for (const [key, value] of response.headers)
       headerBytes += new TextEncoder().encode(key + value).length;
@@ -127,6 +130,7 @@ async function acquire(input, outbound, signal) {
       status: response.status,
       contentType,
       body,
+      byteCount: bytes.byteLength,
       redirects,
     };
   }
@@ -163,7 +167,9 @@ export async function handleRequest(request, env, outbound = fetch) {
     return json({ error: "origin_forbidden" }, 403);
   headers["Access-Control-Allow-Origin"] = origin.origin;
   const url = new URL(request.url);
-  const method = url.pathname === "/v1/info" ? "GET" : url.pathname === "/v1/fetch" ? "POST" : null;
+  const service = /^\/v1\/search\/(brave|exa|firecrawl|you)$/.exec(url.pathname)?.[1];
+  const method =
+    url.pathname === "/v1/info" ? "GET" : url.pathname === "/v1/fetch" || service ? "POST" : null;
   if (!method || url.search) return json({ error: "route_not_found" }, 404);
   if (request.method === "OPTIONS") {
     const requestedHeaders = (request.headers.get("access-control-request-headers") ?? "")
@@ -196,6 +202,7 @@ export async function handleRequest(request, env, outbound = fetch) {
   request.signal.addEventListener("abort", abort, { once: true });
   if (request.signal.aborted) abort();
   const timer = setTimeout(abort, 15000);
+  const evidence = { contacts: [], redirects: [] };
   try {
     if (request.headers.get("content-type")?.split(";")[0] !== "application/json")
       throw new AcquisitionError("invalid_request");
@@ -206,14 +213,76 @@ export async function handleRequest(request, env, outbound = fetch) {
     } catch {
       throw new AcquisitionError("invalid_request");
     }
+    if (service) {
+      let relay;
+      try {
+        relay = relayRequest(service, input);
+      } catch {
+        throw new AcquisitionError("invalid_search_request");
+      }
+      if (input.credential === env.APER_RUNTIME_SECRET)
+        throw new AcquisitionError("invalid_search_credential");
+      evidence.contacts.push(relay.endpoint);
+      const response = await outbound(relay.endpoint, { ...relay.init, signal: controller.signal });
+      let headerBytes = 0;
+      for (const [key, value] of response.headers)
+        headerBytes += new TextEncoder().encode(key + value).length;
+      if (headerBytes > 32768 || (response.status >= 300 && response.status < 400)) {
+        await response.body?.cancel();
+        throw new AcquisitionError(
+          headerBytes > 32768 ? "headers_too_large" : "search_redirect_forbidden",
+          502,
+        );
+      }
+      const quota = {};
+      for (const name of [
+        "retry-after",
+        "x-ratelimit-remaining",
+        "x-ratelimit-limit",
+        "x-ratelimit-reset",
+      ]) {
+        const value = response.headers.get(name);
+        if (
+          value &&
+          value.length <= 100 &&
+          /^[A-Za-z0-9, .:+-]+$/.test(value) &&
+          !value.includes(input.credential) &&
+          !value.includes(env.APER_RUNTIME_SECRET)
+        )
+          quota[name] = value;
+      }
+      if (!response.ok) {
+        await response.body?.cancel();
+        return json({ status: response.status, body: null, quota, ...evidence });
+      }
+      if (!response.headers.get("content-type")?.startsWith("application/json")) {
+        await response.body?.cancel();
+        throw new AcquisitionError("invalid_search_response", 502);
+      }
+      const bytes = await readBounded(response.body, 2_000_000, controller.signal);
+      let body;
+      try {
+        body = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+      } catch {
+        throw new AcquisitionError("invalid_search_response", 502);
+      }
+      return json({
+        status: response.status,
+        body,
+        quota,
+        byteCount: bytes.byteLength,
+        ...evidence,
+      });
+    }
     if (!input || typeof input !== "object" || Object.keys(input).length !== 1 || !("url" in input))
       throw new AcquisitionError("invalid_request");
-    return json(await acquire(input.url, outbound, controller.signal));
+    return json(await acquire(input.url, outbound, controller.signal, evidence));
   } catch (error) {
-    if (controller.signal.aborted) return json({ error: "deadline_or_cancelled" }, 504);
+    if (controller.signal.aborted)
+      return json({ error: "deadline_or_cancelled", ...evidence }, 504);
     return error instanceof AcquisitionError
-      ? json({ error: error.message }, error.status)
-      : json({ error: "acquisition_failed" }, 502);
+      ? json({ error: error.message, ...evidence }, error.status)
+      : json({ error: "acquisition_failed", ...evidence }, 502);
   } finally {
     clearTimeout(timer);
     request.signal.removeEventListener("abort", abort);
