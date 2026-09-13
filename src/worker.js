@@ -1,12 +1,18 @@
 import { relayRequest, searchServices } from "./search-relay.js";
 import { AcquisitionError, publicTarget, readBounded } from "./public-network.js";
 import { renderPublicDocument } from "./browser-rendering.js";
+import { relayMarkdownNew } from "./markdown-new-relay.js";
 export { publicTarget } from "./public-network.js";
 export const INFO = Object.freeze({
   kind: "aper-web-access",
-  protocolVersion: "1.2",
-  buildId: "1.2.0",
-  capabilities: { staticFetch: true, browserRun: false, searchRelay: searchServices },
+  protocolVersion: "1.3",
+  buildId: "1.3.0",
+  capabilities: {
+    staticFetch: true,
+    browserRun: false,
+    searchRelay: searchServices,
+    markdownNewRelay: true,
+  },
 });
 
 async function acquire(input, outbound, signal, evidence) {
@@ -123,7 +129,7 @@ export async function handleRequest(
   const method =
     url.pathname === "/v1/info"
       ? "GET"
-      : ["/v1/fetch", "/v1/render"].includes(url.pathname) || service
+      : ["/v1/fetch", "/v1/render", "/v1/markdown-new"].includes(url.pathname) || service
         ? "POST"
         : null;
   if (!method || url.search) return json({ error: "route_not_found" }, 404);
@@ -233,6 +239,8 @@ export async function handleRequest(
     }
     if (!input || typeof input !== "object" || Object.keys(input).length !== 1 || !("url" in input))
       throw new AcquisitionError("invalid_request");
+    if (url.pathname === "/v1/markdown-new")
+      return json(await relayMarkdownNew(input.url, outbound, controller.signal, evidence));
     if (url.pathname === "/v1/render")
       return json(
         await render(input.url, env.BROWSER, outbound, controller.signal, evidence, waitUntil),

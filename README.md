@@ -1,6 +1,6 @@
 # Web Access Worker
 
-Release **1.2.0**, protocol **1.2**, deployment kind **aper-web-access**. One user-owned Cloudflare Worker provides static public-document acquisition, allowlisted search relaying, and optional Browser Run. Acquisition stays here; extraction, normalization, backend policy and Callable projection stay in Aper. There is no persistence, telemetry, account-management client, MCP route, crawler, or browser-command API.
+Release **1.3.0**, protocol **1.3**, deployment kind **aper-web-access**. One user-owned Cloudflare Worker provides static public-document acquisition, allowlisted search relaying, optional Browser Run, and a fixed markdown.new relay. Static/rendered extraction, normalization, backend policy and Callable projection stay in Aper; markdown.new performs its own external conversion. There is no persistence, telemetry, account-management client, MCP route, crawler, or browser-command API.
 
 ## Install and connect
 
@@ -26,6 +26,7 @@ All routes require exact Origin and a separate 256-bit runtime bearer secret. CO
 | `POST /v1/fetch`             | Only `{ url }`              | Requested/final URL, status, content type, decoded body, byte count, ordered HTTP redirects                                    |
 | `POST /v1/render`            | Only `{ url }`              | Same document fields, rendered acquisition marker, navigation/contact evidence, resource counts and isolation/readiness policy |
 | `POST /v1/search/<provider>` | Only `{ body, credential }` | Upstream status, bounded JSON body, allowlisted quota headers and contact evidence                                             |
+| `POST /v1/markdown-new`      | Only `{ url }`              | Bounded upstream JSON text, content type, byte count and service-contact evidence                                              |
 
 Non-2xx errors return sanitized `{ error, contacts, redirects, ... }` evidence. Codes distinguish target policy, authentication, unsupported/partial content, encoding, response bounds, deadlines, browser eligibility/quota, browser execution and cleanup. Raw exceptions, upstream error bodies and credentials are not returned or logged. Protocol-major compatibility preserves existing static/relay clients; rendering requires the 1.2 envelope.
 
@@ -45,12 +46,18 @@ Every navigation and redirect is revalidated. Rendering allows at most 80 reques
 
 `search-relay.js` validates each provider's exact supported request shape and fixed defaults, constructs its allowlisted endpoint/POST/auth header, and refuses arbitrary URLs, headers, redirects, methods, synthesis or scraping options. Provider credentials are distinct from the runtime secret. Responses are bounded to 2 MB before decoding; rejected upstream responses preserve status and safe quota headers with a null body. Search normalization stays in Aper. Rendering service failures do not mutate relay or static availability.
 
+## Compatibility relay
+
+`markdown-new-relay.js` serves only the fixed JSON conversion endpoint at [markdown.new](https://markdown.new/), with `method: auto` and images disabled. It validates the public target, constructs one credential-free POST, rejects service redirects and known partial responses, and bounds headers, UTF-8 decoding and response bytes (1 MB) under the common cancellation/deadline policy. Aper validates the returned JSON and completeness flags locally. The Worker never selects fallback or uses `BROWSER` for this route; independent Aper consent and captured protocol-1.3 `markdownNewRelay` support select it. This permits fallback after Browser Run quota exhaustion without becoming an arbitrary proxy. The external service's own conversion policy, quota and availability still apply.
+
 ## Verification
 
-Run `vp check --fix`, `vp test`, `vp build`, and `vp exec wrangler deploy --dry-run --outdir dist/deploy`. Vite's library build leaves the Worker-only browser package external; Wrangler performs the deployable bundle with its platform compatibility. Unit tests cover routing/auth/CORS, targets, redirects, decoding/resource bounds, provider allowlists, rendering service/quota failure, cancellation and late-browser cleanup.
+Run `vp check --fix`, `vp test`, `vp build`, and `vp exec wrangler deploy --dry-run --outdir dist/deploy`. Vite's library build leaves the Worker-only browser package external; Wrangler performs the deployable bundle with its platform compatibility. Unit tests cover routing/auth/CORS, targets, redirects, decoding/resource bounds, provider allowlists, rendering service/quota failure, cancellation, late-browser cleanup, and the fixed compatibility relay's credential exclusion and independence from Browser Run.
 
 From the adjacent Aper repository, `vp exec node scripts/verify-web-worker-browser.mjs` checks real Chromium HTTP/CORS for static and search routes. `vp exec node scripts/verify-web-rendering-browser.mjs` executes the production renderer against isolated Chromium with deterministic upstreams, proving JavaScript/fragment rendering, storage isolation, credential stripping, auxiliary-API restrictions, private requests/redirects, POST rejection, navigation bounds and cleanup. Aper's Web, configuration and settings suites verify extraction, explicit fallback policy and replacement publication. These local checks do not prove Cloudflare service availability.
 
 User-observed hosted installation on a Workers Free account deployed release 1.2.0 to [aper-web-access-test-1dot2](https://aper-web-access-test-1dot2.badmovie100.workers.dev) at `2026-09-12T23:52:06.819Z` (Cloudflare version `c8cac93a-cda6-4085-a5c8-13572983452d`). Aper reported protocol 1.2 and **Browser rendering: verified**, checked `2026-09-12T23:52:50.725Z`. This establishes authenticated static acquisition and a successful example.com render through the installed browser binding, beyond binding presence alone. It does not establish arbitrary-page completeness, live provider relay behavior, or ongoing availability.
+
+On 2026-09-13, `vp exec node scripts/verify-web-worker-browser.mjs --live-markdown-new` in Aper retrieved a live example.com conversion through this production relay in a local HTTP harness, while isolated Chromium could not read either direct GET or POST service responses. Direct preflight returned 404 and GET/POST responses lacked Access-Control-Allow-Origin. That check proves the relay's browser boundary and live service compatibility, without claiming a hosted 1.3 deployment.
 
 References: [Deploy to Cloudflare](https://developers.cloudflare.com/workers/platform/deploy-buttons/), [Browser binding](https://developers.cloudflare.com/browser-run/reference/wrangler/), [Puppeteer binding and limits](https://developers.cloudflare.com/browser-run/puppeteer/), [Worker fetch routing](https://developers.cloudflare.com/workers/runtime-apis/fetch/).
