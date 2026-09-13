@@ -12,18 +12,20 @@ Release **1.2.0**, protocol **1.2**, deployment kind **aper-web-access**. One us
 
 The installer follows the public repository's default branch; no immutable release pin is claimed. Your repository copy does not automatically receive updates. Replacement uses a fresh secret and endpoint and switches local configuration only after mandatory verification. Failed/cancelled setup retains the old connection and infrastructure. **Disconnect** removes only Aper's connection; deletion and secret revocation remain actions in Cloudflare.
 
+Cloudflare documents Browser Run on [Workers Free and Paid plans](https://developers.cloudflare.com/browser-run/pricing/), with plan-specific quotas. The hosted installer has displayed a Workers Paid warning while successfully deploying this template on a Free account. Aper's actual rendering check establishes service availability at the recorded time; the installer message and binding declaration do not.
+
 For CLI deployment use `vp install --frozen-lockfile`, configure the origin in `wrangler.jsonc`, enter the secret through `vp exec wrangler secret put APER_RUNTIME_SECRET`, and deploy with `vp exec wrangler deploy`. CLI authorization stays in your account. Local configuration uses the gitignored `.dev.vars` copied from the empty example.
 
 ## HTTP contract
 
 All routes require exact Origin and a separate 256-bit runtime bearer secret. CORS is browser policy, not authentication. Only route-specific GET/POST preflight and Authorization/Content-Type are accepted; responses disable caching. Request bodies are bounded to 10 KB.
 
-| Route                   | Input          | Result                                                                                                                         |
-| ----------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `GET /v1/info`          | Authentication | Kind, protocol, build, and supported capabilities; `browserRun` reports binding presence                                       |
-| `POST /v1/fetch`        | Only `{ url }` | Requested/final URL, status, content type, decoded body, byte count, ordered HTTP redirects                                    |
-| `POST /v1/render`       | Only `{ url }` | Same document fields, rendered acquisition marker, navigation/contact evidence, resource counts and isolation/readiness policy |
-| `POST /v1/search/{brave | exa            | firecrawl                                                                                                                      | you}` | Only `{ body, credential }` | Upstream status, bounded JSON body, allowlisted quota headers and contact evidence |
+| Route                        | Input                       | Result                                                                                                                         |
+| ---------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `GET /v1/info`               | Authentication              | Kind, protocol, build, and supported capabilities; `browserRun` reports binding presence                                       |
+| `POST /v1/fetch`             | Only `{ url }`              | Requested/final URL, status, content type, decoded body, byte count, ordered HTTP redirects                                    |
+| `POST /v1/render`            | Only `{ url }`              | Same document fields, rendered acquisition marker, navigation/contact evidence, resource counts and isolation/readiness policy |
+| `POST /v1/search/<provider>` | Only `{ body, credential }` | Upstream status, bounded JSON body, allowlisted quota headers and contact evidence                                             |
 
 Non-2xx errors return sanitized `{ error, contacts, redirects, ... }` evidence. Codes distinguish target policy, authentication, unsupported/partial content, encoding, response bounds, deadlines, browser eligibility/quota, browser execution and cleanup. Raw exceptions, upstream error bodies and credentials are not returned or logged. Protocol-major compatibility preserves existing static/relay clients; rendering requires the 1.2 envelope.
 
@@ -49,6 +51,6 @@ Run `vp check --fix`, `vp test`, `vp build`, and `vp exec wrangler deploy --dry-
 
 From the adjacent Aper repository, `vp exec node scripts/verify-web-worker-browser.mjs` checks real Chromium HTTP/CORS for static and search routes. `vp exec node scripts/verify-web-rendering-browser.mjs` executes the production renderer against isolated Chromium with deterministic upstreams, proving JavaScript/fragment rendering, storage isolation, credential stripping, auxiliary-API restrictions, private requests/redirects, POST rejection, navigation bounds and cleanup. Aper's Web, configuration and settings suites verify extraction, explicit fallback policy and replacement publication. These local checks do not prove Cloudflare service availability.
 
-Hosted evidence currently records user-observed release 1.0.0 installation and authenticated static verification at `https://aper-web-access-test.badmovie100.workers.dev`, checked `2026-09-12T22:26:00.140Z`. That earlier evidence does not establish live 1.2 rendering or relay availability; the rendering replacement requires its own hosted check.
+User-observed hosted installation on a Workers Free account deployed release 1.2.0 to [aper-web-access-test-1dot2](https://aper-web-access-test-1dot2.badmovie100.workers.dev) at `2026-09-12T23:52:06.819Z` (Cloudflare version `c8cac93a-cda6-4085-a5c8-13572983452d`). Aper reported protocol 1.2 and **Browser rendering: verified**, checked `2026-09-12T23:52:50.725Z`. This establishes authenticated static acquisition and a successful example.com render through the installed browser binding, beyond binding presence alone. It does not establish arbitrary-page completeness, live provider relay behavior, or ongoing availability.
 
 References: [Deploy to Cloudflare](https://developers.cloudflare.com/workers/platform/deploy-buttons/), [Browser binding](https://developers.cloudflare.com/browser-run/reference/wrangler/), [Puppeteer binding and limits](https://developers.cloudflare.com/browser-run/puppeteer/), [Worker fetch routing](https://developers.cloudflare.com/workers/runtime-apis/fetch/).
