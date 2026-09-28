@@ -2,16 +2,18 @@ import { relayRequest, searchServices } from "./search-relay.js";
 import { AcquisitionError, publicTarget, readBounded } from "./public-network.js";
 import { renderPublicDocument } from "./browser-rendering.js";
 import { relayMarkdownNew } from "./markdown-new-relay.js";
+import { acquirePublicBytes } from "./byte-acquisition.js";
 export { publicTarget } from "./public-network.js";
 export const INFO = Object.freeze({
   kind: "aper-web-access",
-  protocolVersion: "1.3",
-  buildId: "1.3.0",
+  protocolVersion: "1.4",
+  buildId: "1.4.0",
   capabilities: {
     staticFetch: true,
     browserRun: false,
     searchRelay: searchServices,
     markdownNewRelay: true,
+    exactBytes: true,
   },
 });
 
@@ -129,7 +131,8 @@ export async function handleRequest(
   const method =
     url.pathname === "/v1/info"
       ? "GET"
-      : ["/v1/fetch", "/v1/render", "/v1/markdown-new"].includes(url.pathname) || service
+      : ["/v1/fetch", "/v1/render", "/v1/markdown-new", "/v1/bytes"].includes(url.pathname) ||
+          service
         ? "POST"
         : null;
   if (!method || url.search) return json({ error: "route_not_found" }, 404);
@@ -245,6 +248,21 @@ export async function handleRequest(
       return json(
         await render(input.url, env.BROWSER, outbound, controller.signal, evidence, waitUntil),
       );
+    if (url.pathname === "/v1/bytes") {
+      const acquired = await acquirePublicBytes(input.url, outbound, controller.signal, evidence);
+      return new Response(acquired.bytes, {
+        headers: {
+          ...headers,
+          "Access-Control-Expose-Headers":
+            "Aper-Final-Url, Aper-Byte-Count, Aper-Media-Type, Aper-Redirect-Count",
+          "Aper-Final-Url": acquired.finalUrl,
+          "Aper-Byte-Count": String(acquired.bytes.byteLength),
+          "Aper-Redirect-Count": String(acquired.redirects.length),
+          ...(acquired.mediaType ? { "Aper-Media-Type": acquired.mediaType } : {}),
+          "Content-Length": String(acquired.bytes.byteLength),
+        },
+      });
+    }
     return json(await acquire(input.url, outbound, controller.signal, evidence));
   } catch (error) {
     if (controller.signal.aborted)

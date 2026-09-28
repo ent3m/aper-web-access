@@ -17,6 +17,12 @@ const fetchRequest = (url, extra = {}) =>
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url, ...extra }),
   });
+const bytesRequest = (url, extra = {}) =>
+  request("/v1/bytes", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url, ...extra }),
+  });
 
 describe("Web Access production template", () => {
   it("requires exact origin and independent runtime authentication on its versioned routes", async () => {
@@ -108,6 +114,73 @@ describe("Web Access production template", () => {
       403,
     );
     expect(unsafe).toHaveBeenCalledTimes(1);
+  });
+  it("relays complete bounded bytes with validated metadata and no target credentials", async () => {
+    const payload = new Uint8Array([0, 255, 17, 42]);
+    const outbound = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(null, { status: 302, headers: { Location: "/asset.bin" } }),
+      )
+      .mockResolvedValueOnce(
+        new Response(payload, {
+          headers: { "Content-Type": "application/octet-stream", "Content-Length": "4" },
+        }),
+      );
+    const response = await handleRequest(bytesRequest("https://example.com/start"), env, outbound);
+    expect(response.status).toBe(200);
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(payload);
+    expect(response.headers.get("aper-final-url")).toBe("https://example.com/asset.bin");
+    expect(response.headers.get("aper-byte-count")).toBe("4");
+    expect(response.headers.get("aper-media-type")).toBe("application/octet-stream");
+    expect(response.headers.get("aper-redirect-count")).toBe("1");
+    expect(outbound.mock.calls[1][1]).toMatchObject({
+      method: "GET",
+      redirect: "manual",
+      credentials: "omit",
+      headers: {
+        Accept: "*/*",
+        "Accept-Encoding": "identity",
+        "User-Agent": "Aper-Web-Access/1.0",
+      },
+    });
+    expect(JSON.stringify(outbound.mock.calls)).not.toContain(env.APER_RUNTIME_SECRET);
+  });
+  it("rejects byte truncation, encoded bodies, unsafe redirects, and model controls", async () => {
+    for (const response of [
+      new Response(new Uint8Array([1, 2]), { headers: { "Content-Length": "3" } }),
+      new Response(new Uint8Array([1, 2]), { headers: { "Content-Encoding": "gzip" } }),
+      new Response(new Uint8Array([1, 2]), { status: 206 }),
+    ]) {
+      const result = await handleRequest(
+        bytesRequest("https://example.com/asset"),
+        env,
+        async () => response,
+      );
+      expect(result.ok).toBe(false);
+    }
+    const unsafe = vi.fn(
+      async () =>
+        new Response(null, {
+          status: 302,
+          headers: { Location: "http://169.254.169.254/latest" },
+        }),
+    );
+    expect(
+      (await handleRequest(bytesRequest("https://example.com/asset"), env, unsafe)).status,
+    ).toBe(403);
+    expect(unsafe).toHaveBeenCalledTimes(1);
+    const controlled = vi.fn();
+    expect(
+      (
+        await handleRequest(
+          bytesRequest("https://example.com/asset", { headers: { Cookie: "private" } }),
+          env,
+          controlled,
+        )
+      ).status,
+    ).toBe(400);
+    expect(controlled).not.toHaveBeenCalled();
   });
   it("rejects arbitrary controls, binary documents, oversized bodies and sanitized upstream errors", async () => {
     const outbound = vi.fn();
